@@ -22,6 +22,7 @@ import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { isBypassed } from "./shared/session-model.mjs";
 import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-guard-adapter.mjs";
+import { appendSystemPrompt } from "./lib/system-prompt.mjs";
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
 import { registerMcpTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
@@ -289,7 +290,7 @@ export default async function (pi: ExtensionAPI) {
     if (!additions) return;
 
     return {
-      systemPrompt: event.systemPrompt + "\n\n" + additions,
+      systemPrompt: appendSystemPrompt(event.systemPrompt, additions),
     };
   });
 
