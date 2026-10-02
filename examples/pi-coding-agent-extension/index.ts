@@ -24,6 +24,7 @@ import { isBypassed } from "./shared/session-model.mjs";
 import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-guard-adapter.mjs";
 import { appendSystemPrompt } from "./lib/system-prompt.mjs";
 import { resolveContextMessageIds } from "./lib/context-message-ids.mjs";
+import { isOmpHost } from "./lib/host-adapter.mjs";
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
 import { registerMcpTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
@@ -31,6 +32,13 @@ import { HANDLER_BUDGET_MS, describeSkip } from "./lib/takeover-core.mjs";
 
 /** This extension's directory, published for the experimental fork's probe. */
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Recall budget under a host with a context-handler watchdog (omp kills at 30s).
+ * Leaves 5s of headroom so a slow search fails open rather than being killed
+ * mid-flight and taking the turn with it.
+ */
+const OMP_CONTEXT_DEADLINE_MS = 25000;
 
 export default async function (pi: ExtensionAPI) {
   // --- Load config ---
@@ -301,7 +309,9 @@ export default async function (pi: ExtensionAPI) {
 
     // Keep recall synchronous with the provider request so the current prompt
     // still receives current-query memory, without blocking user-message UI.
-    await recall.searchPending();
+    // omp kills a context handler at 30s, so its recall gets a shorter budget
+    // and fails open before the watchdog instead of taking the turn with it.
+    await recall.searchPending(isOmpHost(ctx) ? OMP_CONTEXT_DEADLINE_MS : undefined);
 
     // The entry IDs let the recall ledger replay an injected block onto the
     // historical message it was sent with, keeping the provider prompt-prefix

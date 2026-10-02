@@ -3,6 +3,7 @@ import type { OVConfig } from "./config.js";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 import { RecallLedger, ledgerKey } from "./lib/recall-ledger.mjs";
+import { capRecallTimeout } from "./lib/recall-deadline.mjs";
 
 export interface RecallCache {
   block: string | null;
@@ -40,7 +41,7 @@ export class RecallManager {
     this.pendingPrompt = userQuery;
   }
 
-  async searchPending(): Promise<string | null> {
+  async searchPending(maxTimeoutMs?: number): Promise<string | null> {
     if (!this.pendingPrompt) return this.cache.block;
 
     const userQuery = this.pendingPrompt;
@@ -70,7 +71,9 @@ export class RecallManager {
       // 10s is this extension's own budget for a bare retrieval; when the
       // request also spends a server fuse the helper hands down a longer
       // deadline, and ignoring it would abort a request still inside its fuse.
-      (path, init, options) => this.client.fetchJSON(path, init, options),
+      // Hosts with a shorter hook watchdog pass maxTimeoutMs so recall fails
+      // open before the watchdog instead of being killed mid-flight.
+      (path, init, options) => this.client.fetchJSON(path, init, capRecallTimeout(options, maxTimeoutMs)),
       this.config,
       query,
       {
