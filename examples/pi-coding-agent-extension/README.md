@@ -1,8 +1,15 @@
-# OpenViking Memory Extension for Pi Coding Agent
+# OpenViking Memory Extension for omp (and pi)
 
 > **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
 
-Long-term semantic memory and context takeover for [pi](https://github.com/earendil-works/pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and OpenViking can own long-term context by replacing committed history with an archive overview in pi's `context` hook.
+Long-term semantic memory and context takeover for [omp (oh-my-pi)](https://github.com/can1357/oh-my-pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and OpenViking can own long-term context by replacing committed history with an archive overview in the host's `context` hook.
+
+**omp is the host this extension is developed and verified against** — including its session
+switches, its in-place `/clear`, its handler budgets and its tool-mounting rules. It also runs
+on [pi](https://github.com/earendil-works/pi), which shares the extension API; the differences
+are host capabilities (a projected context, an agent identity, a shutdown budget) that the
+extension probes for rather than assumes, so nothing here is pi-specific or omp-specific.
+See [DESIGN.md](./DESIGN.md) for the module-by-module design.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
 > caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less

@@ -227,6 +227,13 @@ starting again, with the derived OpenViking id carrying a suffix for the
 post-`/clear` generation. Anything less either captures a new conversation into
 an old memory stream or replays injected blocks the provider never sent.
 
+**Host capabilities, not host names.** Every difference between hosts is probed, not
+branched on a product: whether the session manager projects a context
+(`buildContextEntries`), whether the context carries an agent identity (`agent.kind`),
+and whether the host announces a conversation change (`session_switch`). This extension
+is developed and verified against omp; the probes are what let the same file also run
+under pi without a per-host fork.
+
 **Two guards.** The bypass check runs the shared `isBypassed` against the cwd, so a scratch directory never pollutes long-term memory; the pattern syntax is the shared one, identical across harnesses. The health check runs once — if the server is unreachable the extension stays disconnected for the whole session, every handler returns early and no tools are registered. No retries, no repeated warnings. A bypassed directory never opens the bridge at all: bypass means this directory does not touch OpenViking.
 
 **Startup is memoized, not awaited.** The startup chain — health check, session derivation, pending replay, profile build, takeover restore, tool registration — costs a couple of seconds against a remote server, and `session_start` does not await it, because that delay would land on every pi launch. `before_agent_start` awaits the same in-flight promise, so the first turn still gets its profile and recall. That is also the only startup path a `pi -c` continuation has: pi does not fire `session_start` for one. The MCP handshake is started right after the health check so it runs alongside the pending replay, the profile build and takeover recovery, and is joined at the end of the chain; when it failed, a separate branch in `before_agent_start` retries it once per turn until the session has tools. The list is never refreshed after that: pi has no `unregisterTool`, and adding or removing a tool mid-session rewrites the prompt's tool section and invalidates the provider's cached prefix. With the shared `mcpEnabled` key set to `false` there is no bridge at all, and the status line does not report that as a failure — it is what was asked for.
