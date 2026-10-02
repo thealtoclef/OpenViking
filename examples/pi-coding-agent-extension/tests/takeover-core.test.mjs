@@ -1162,3 +1162,67 @@ test("describeSkip reads the server skip reasons", () => {
   assert.match(describeSkip("all_within_keep_window", 125), /at most the 125 most recent messages/);
   assert.equal(describeSkip("weird"), "the server skipped the archive (weird)");
 });
+
+test("resetSession clears the whole conversation and persists the cleared state", () => {
+  const { core, calls } = makeCore();
+  restoreBoundary(core, "m1", { overview: "old overview", pendingTokens: 900 });
+  core.pendingArchive = { archiveUri: "viking://a/1", taskId: "t" };
+  core.captureGap = true;
+  const before = calls.persisted.length;
+
+  core.resetSession("switch");
+
+  assert.equal(core.state.coveredThroughEntryId, "");
+  assert.equal(core.state.coveredUserTurns, 0);
+  assert.equal(core.state.overview, "");
+  assert.equal(core.state.pendingTokens, 0);
+  assert.equal(core.state.pendingArchive, null);
+  assert.equal(core.state.captureGap, false);
+
+  // Persisting is what makes the reset survive: restore() scans the branch for
+  // the newest takeover entry, and a `/clear` leaves the stale one in place.
+  assert.ok(calls.persisted.length > before, "the reset must be written to the transcript");
+  const last = calls.persisted.at(-1);
+  assert.equal(last.type, TAKEOVER_ENTRY_TYPE);
+  assert.equal(last.data.overview, "");
+  assert.equal(last.data.captureGap, false);
+});
+
+test("a reset survives a restore, so the new conversation starts clean", () => {
+  const { core, calls } = makeCore();
+  restoreBoundary(core, "m1", { overview: "old overview", pendingTokens: 900 });
+  core.resetSession("clear");
+
+  // What the next start() reads back: the newest entry is the reset we wrote.
+  const restored = new TakeoverCore({
+    config: { takeoverEnabled: true, takeoverTokenThreshold: 100, takeoverKeepRecentTurns: 1, takeoverOverviewBudget: 1000, takeoverOverviewPollMs: 1, takeoverOverviewPollMax: 3 },
+    io: {
+      syncBranch: async () => ({ added: 0, tokens: 0 }),
+      flush: async () => true,
+      commit: async () => ({ status: "skipped" }),
+      readArchiveOverview: async () => "",
+      archiveState: async () => "completed",
+      captureCount: () => 0,
+      persistEntry: () => {},
+      getWatermark: () => 0,
+      droppedCount: () => 0,
+      availableTools: () => [],
+      sleep: async () => {},
+      log: () => {},
+    },
+  });
+  restored.restore([{ type: "custom", customType: TAKEOVER_ENTRY_TYPE, data: calls.persisted.at(-1).data }]);
+  assert.equal(restored.state.coveredThroughEntryId, "");
+  assert.equal(restored.state.overview, "", "a cleared conversation must not restore the dropped archive overview");
+  assert.equal(restored.state.pendingTokens, 0);
+});
+
+test("an unchanged reset is still written, so zeroes are not skipped", () => {
+  const { core, calls } = makeCore();
+  // A fresh core has nothing to clear, so a naive persist would find the
+  // serialized state unchanged and skip the write, leaving the stale entry as
+  // the newest one restore() sees.
+  const before = calls.persisted.length;
+  core.resetSession("clear");
+  assert.equal(calls.persisted.length, before + 1);
+});
