@@ -49,8 +49,39 @@ cp -R examples/pi-coding-agent-extension/. ~/.pi/agent/extensions/openviking/
 npm ci --prefix ~/.pi/agent/extensions/openviking --omit=dev --ignore-scripts
 ```
 
-### 3. Configure (optional)
+### 2b. Under omp (oh-my-pi)
 
+The same extension runs under `omp`, which implements the pi extension API with
+a few differences this extension adapts to. Install it one way, not both:
+
+```bash
+omp plugin install @thealtoclef/pi-openviking
+```
+
+or copy it into `~/.omp/agent/extensions/openviking` and run
+`npm ci --prefix ~/.omp/agent/extensions/openviking --omit=dev --ignore-scripts`.
+
+Two settings are worth setting once it works:
+
+```yaml
+# ~/.omp/agent/config.yml
+memory:
+  backend: off   # only if another backend is selected: two memory layers
+                 # double the recall instructions, the tools and the prompt cost
+```
+
+- `tools.xdev` (default `true`) mounts *discoverable* extension tools under
+  `xd://` instead of making them callable by name. The OpenViking tools are
+  registered as `"essential"`, so they stay top-level and both the system-prompt
+  line and the URI-guard hints keep working. If a host ignores that field, set
+  `tools.xdev: false`.
+- `compaction.methodOrder` defaults to `[remote, snapcompact, handoff, shake,
+  soft]`. `shake` rewrites history without firing `session_before_compact`, so
+  takeover does not see it; drop `shake` if takeover is enabled.
+- The lifecycle events omp emits (`session_before_switch`, `session_switch`) and
+  its in-place `/clear` are handled — see "Conversation boundaries" above.
+
+### 3. Configure (optional)
 Credentials are resolved from `OPENVIKING_*` environment variables, `~/.openviking/ovcli.conf`, then `~/.openviking/ov.conf`. Run the setup wizard when you need to configure a remote server:
 
 ```bash
@@ -220,6 +251,32 @@ filtered or truncated the original Pi transcript.
 | `takeoverOverviewPollMs` | `2000`     | Delay between overview reads while answering pi's compaction             |
 | `takeoverOverviewPollMax`| `15`       | Max overview reads for pi's compaction; capped by the 25s handler budget |
 
+### Tool-result admission
+
+Takeover bounds history by *user turns*, not by tokens, so the retained tail is
+unbounded: one large `bash` or `read` result inside `takeoverKeepRecentTurns` can
+still overflow the window even though the archived span was replaced by a
+3k-token overview. Admission caps each tool result at the entrance to the
+`context` hook, before takeover runs, projecting oversized output to a
+deterministic head/tail excerpt marked `[tool result projected: kept N of ~M
+tokens]`. The projection is recomputed from the text on every request and never
+trusts the marker, so it is idempotent and stays correct if the model window
+shrinks. Only `toolResult` messages are rewritten, and only by constructing new
+objects, so user and assistant messages keep their identity.
+
+| Field                       | Default | Description                                                       |
+|-----------------------------|---------|-------------------------------------------------------------------|
+| `toolAdmissionEnabled`      | `true`  | Cap oversized tool results in the provider-facing context         |
+| `toolAdmissionCapFraction`  | `0.05`  | Per-result budget as a fraction of the model context window       |
+| `toolAdmissionMinTokens`    | `8192`  | Floor for the per-result budget on small windows                  |
+| `toolAdmissionMaxTokens`    | `50000` | Ceiling for the per-result budget on large windows                |
+
+### Spawned sessions
+
+| Field                    | Default    | Description                                                              |
+|--------------------------|------------|--------------------------------------------------------------------------|
+| `skipSubagentSessions`   | `false`    | Exclude sessions the host spawns (omp subagents, `/tan` clones) from OpenViking entirely: no session, profile, recall, capture or tools. Env: `OPENVIKING_SKIP_SUBAGENT_SESSIONS` |
+
 ### Injection tuning
 
 | Field                    | Default    | Description                                                              |
@@ -240,6 +297,20 @@ The profile block is built at session start and added to pi's system prompt on e
 | `debugLogPath`           | `""`       | Write JSON Lines debug records to this path; empty disables the log      |
 
 Bypass now runs through the same matcher every other OpenViking harness uses, so the patterns are real globs: `*` stops at a path separator and `**` crosses them. A bare path used to match its subdirectories as a prefix, and no longer does — write `"/tmp/scratch**"` where `"/tmp/scratch"` used to be enough.
+
+Bypass patterns are matched against the session's own directory, not the host
+process's, so a session running in a worktree or another directory is judged by
+where it actually runs.
+
+### Shutdown budget
+
+`turn_end` syncs each completed turn, so by the time `session_shutdown` runs only
+the last in-flight turn is outstanding. That matters because hosts cap the
+shutdown handler far below the others — omp allows 2 seconds where every other
+event gets 30 — so a final commit can be cut short on a slow server. Nothing is
+lost when it is: capture writes go through the pending queue keyed by session id
+and are replayed on the next start, and takeover had already persisted its
+state. Treat the shutdown commit as an optimization, not the only write.
 
 ## Architecture
 
@@ -275,11 +346,49 @@ Arguments are checked against the server's original schema before pi's own valid
 | Pi Event               | Extension Action                                                                 |
 |------------------------|----------------------------------------------------------------------------------|
 | `session_start`        | Health check → derive OV session → build profile context → restore takeover state |
-| `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall              |
-| `context`              | Run current-prompt recall after UI rendering, then inject takeover and recall context |
+| `session_before_switch`| Commit the conversation being left (skipped on a session that has nothing pending) |
+| `session_switch`       | Reset session state, then start the new conversation (see below)                  |
+| `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall + notice a `/clear` |
+| `context`              | Admit oversized tool results, run current-prompt recall, then inject takeover and recall context |
 | `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
 | `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages |
 | `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
+
+### Conversation boundaries
+
+A host has two ways to start a conversation that is not the previous one, and
+they need opposite handling.
+
+**A different session** (`/new`, `/resume`, `/fork`). omp keeps the same
+extension runner, so `session_start` never fires again; it emits
+`session_before_switch` and then `session_switch` instead. The extension commits
+the outgoing conversation on the first and rebinds its OpenViking session on the
+second. Hosts that rebuild their runtime instead (pi) re-emit `session_start`
+with a changed session id, which the same code path catches.
+
+**A cleared conversation** (`/clear`). The host keeps the session id and the
+transcript file and appends a `reset_boundary` entry; no lifecycle event fires
+at all. The extension notices the marker on the next turn and moves to its own
+OpenViking session, `pi-<session-id>__<marker-id>`, taking the same form the
+Claude Code plugin uses to isolate a subagent. The cleared conversation keeps
+its own memory stream rather than being appended to the one it just dropped.
+
+Reset means dropping the OpenViking session binding, the sync watermark, the
+recall-ledger binding and cached block, and takeover's boundary together with
+the persisted state that `restore()` would otherwise read back.
+
+### Subagents
+
+A host may rebind this extension into a spawned session — omp does it for every
+task/eval subagent and `/tan` clone. Full participation is the default, matching
+the other harness plugins (Claude Code isolates a subagent per session,
+opencode per child session, codex merges it into the parent), and the host gives
+each spawned session its own id, so it gets its own OpenViking session with no
+extra work. Set `skipSubagentSessions: true` (or
+`OPENVIKING_SKIP_SUBAGENT_SESSIONS=true`) to keep spawned sessions off
+OpenViking entirely: no session, no profile, no recall, no capture, and no
+tools. The knob is shared with the other harness plugins.
+
 
 ### Recall: Synchronous, Not Stale
 
@@ -368,7 +477,7 @@ Pi has a built-in `MEMORY.md` file system. This extension **complements** it:
 | Scope        | Per-project                       | Cross-project, cross-session, cross-agent         |
 | Capacity     | Context-limited                    | Unlimited (server-side storage)                   |
 | Extraction   | Manual rules                      | LLM-powered entity / preference / event extraction|
-| Subagents    | Same as parent                    | Isolated session + typed agent namespace          |
+| Subagents    | Same as parent                    | Own session per spawned session (opt out with `skipSubagentSessions`) |
 
 ## Compared to Claude Code Plugin
 
@@ -400,8 +509,16 @@ pi-coding-agent-extension/
 ├── lib/mcp-result.mjs   # pi content conversion and output limit
 ├── lib/takeover-core.mjs # Pure context-takeover state machine
 ├── lib/recall-ledger.mjs # Injected recall blocks, replayed to keep prompt caches warm
+├── lib/tool-admission.mjs # Head/tail projection of oversized tool results
+├── lib/host-adapter.mjs  # Host capability probes (projected context, spawned sessions)
+├── lib/reset-boundary.mjs # `/clear` marker detection for in-place session resets
+├── lib/context-message-ids.mjs # User message ↔ entry id mapping, per host
+├── lib/system-prompt.mjs # System-prompt merge (string on pi, array on omp)
+├── lib/recall-deadline.mjs # Recall timeout cap for hosts with a shorter handler budget
 ├── index.ts             # Extension entry point (event handlers + /viking command)
 ├── skills/              # generated by memory-plugin-shared/sync.mjs
+├── publish/             # npm overlay manifest + staging script (not shipped)
+├── tests/               # node:test suites, incl. a fake-host lifecycle harness
 ├── package.json         # Name and version (the User-Agent's, and the release gate's)
 ├── DESIGN.md            # Module-by-module design, including context takeover
 └── README.md
@@ -424,3 +541,6 @@ TypeScript is loaded directly by pi's jiti transpiler. The official MCP client i
 ## License
 
 Apache-2.0 — same as [OpenViking](https://github.com/volcengine/OpenViking).
+| `openviking_*` tools not callable under omp | `tools.xdev` (default on) mounts discoverable tools under `xd://` | Built in — the tools register as `"essential"`; if a host ignores that, set `tools.xdev: false` |
+| `/new` keeps writing to the old OpenViking session | Host did not deliver `session_switch`/`session_before_switch` | The extension also detects a changed session id on `session_start`; check `logLevel: "info"` |
+| Memory from a cleared conversation reappears | `/clear` marker not seen (branch without `reset_boundary`) | Expected only on hosts that reuse the session rather than clearing it in place |
