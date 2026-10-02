@@ -79,6 +79,14 @@ async function startServer() {
         return;
       }
       if (path === "/health") await gate.health;
+      // A test can make the commit endpoint answer with a status, e.g. 404 for
+      // a session the server never created.
+      const commit = path.match(/\/api\/v1\/sessions\/[^/]+\/commit$/);
+      if (commit && gate.commitStatus) {
+        res.writeHead(gate.commitStatus, { "content-type": "application/json" });
+        res.end(JSON.stringify({ status: "error", error: { code: "NOT_FOUND", message: "Session not found" } }));
+        return;
+      }
       // Everything the REST half touches during startup: /health, the profile
       // fetch, recall. An empty result keeps each of them a no-op.
       res.writeHead(200, { "content-type": "application/json" });
@@ -197,6 +205,7 @@ export async function withExtension(t, fn, options = {}) {
     session,
     ctx,
     configPath: join(dir, "ovcli.conf"),
+    pendingDir: join(dir, "pending"),
     turn: (prompt, systemPrompt = "BASE") => handlers.get("before_agent_start")(
       { type: "before_agent_start", prompt, systemPrompt },
       ctx(),

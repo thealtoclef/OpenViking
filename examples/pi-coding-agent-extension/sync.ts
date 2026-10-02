@@ -333,6 +333,10 @@ export class SyncManager {
     );
     const result = response.result;
     if (!result) {
+      // 404 means the server never created this session: nothing was ever sent
+      // for it, so there is nothing to archive and nothing to retry. enqueueing
+      // would leave an entry that 404s on every replay, forever.
+      const sessionMissing = Number(response.status) === 404;
       this.lastCommitFailure = describeCommitError(response.status, response.error);
       this.logger.log("commit", {
         session: this.ovSessionId,
@@ -340,8 +344,9 @@ export class SyncManager {
         status: response.status ?? 0,
         trace_id: response.traceId || "none",
         error: response.error?.message || response.error?.code || "unknown",
+        ...(sessionMissing ? { retryable: false } : {}),
       });
-      if (opts.queueOnFailure !== false) {
+      if (!sessionMissing && opts.queueOnFailure !== false) {
         await enqueue("commitSession", this.ovSessionId, {
           keep_recent_count: opts.keepRecentCount ?? 0,
         });
@@ -372,7 +377,10 @@ export class SyncManager {
    * therefore costs a delayed archive, never a lost one.
    */
   async shutdown(): Promise<void> {
-    if (!this.ovSessionId) return;
+    // Nothing was ever synced, so the server has no session to commit: a bare
+    // startup (or a session where every turn failed to capture) would otherwise
+    // fire a request that can only 404.
+    if (!this.ovSessionId || this.syncedEntryCount === 0) return;
     await this.commit({ timeoutMs: SHUTDOWN_COMMIT_TIMEOUT_MS });
   }
 }

@@ -143,8 +143,16 @@ test("oversized tool results are projected in the context hook", async (t) => {
 });
 
 test("shutdown commits the conversation, even under takeover", async (t) => {
-  await withExtension(t, async ({ server, turn, shutdown }) => {
+  await withExtension(t, async ({ server, session, handlers, ctx, turn, shutdown }) => {
+    // A real turn leaves messages on the branch, which is what makes there be
+    // something to archive.
+    session.branch = [
+      { id: "m1", type: "message", message: { role: "user", content: "hello", timestamp: 1 } },
+      { id: "m2", type: "message", message: { role: "assistant", content: "hi", timestamp: 2 } },
+    ];
     await turn("hello");
+    // turn_end is what syncs the branch; before_agent_start only queues recall.
+    await handlers.get("turn_end")({ type: "turn_end" }, ctx());
     await shutdown();
     // Nothing else runs after a quit, so a tail left uncommitted is only ever
     // archived if the user happens to resume that exact session. Takeover used
@@ -154,5 +162,40 @@ test("shutdown commits the conversation, even under takeover", async (t) => {
       server.requests.some((request) => /\/commit$/.test(request)),
       JSON.stringify(server.requests),
     );
+  });
+});
+
+test("a session the server never created is not committed or retried", async (t) => {
+  await withExtension(t, async ({ server, turn, shutdown }) => {
+    // Startup binds the OpenViking session, but the empty branch syncs nothing,
+    // so the server has no such session yet. Committing here can only 404, and
+    // enqueueing that retry left an entry failing again on every later replay.
+    await turn("hello");
+    await shutdown();
+    assert.deepEqual(
+      server.requests.filter((request) => /\/commit$/.test(request)),
+      [],
+      JSON.stringify(server.requests),
+    );
+  });
+});
+
+test("a 404 commit is reported but never queued for retry", async (t) => {
+  await withExtension(t, async ({ server, session, handlers, ctx, turn, shutdown, pendingDir }) => {
+    session.branch = [
+      { id: "m1", type: "message", message: { role: "user", content: "hello", timestamp: 1 } },
+      { id: "m2", type: "message", message: { role: "assistant", content: "hi", timestamp: 2 } },
+    ];
+    await turn("hello");
+    await handlers.get("turn_end")({ type: "turn_end" }, ctx());
+    server.gate.commitStatus = 404;
+    await shutdown();
+
+    assert.ok(server.requests.some((request) => /\/commit$/.test(request)), "the commit was attempted");
+    // The durable path must not swallow a request that can only fail again.
+    // The queue directory is created on first write, so its absence is the
+    // strongest form of "nothing was queued".
+    const { existsSync, readdirSync } = await import("node:fs");
+    assert.deepEqual(existsSync(pendingDir) ? readdirSync(pendingDir) : [], [], "no unretryable commit enters the queue");
   });
 });
