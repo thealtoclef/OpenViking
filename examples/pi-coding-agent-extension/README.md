@@ -375,7 +375,18 @@ its own memory stream rather than being appended to the one it just dropped.
 
 Reset means dropping the OpenViking session binding, the sync watermark, the
 recall-ledger binding and cached block, and takeover's boundary together with
-the persisted state that `restore()` would otherwise read back.
+the persisted state that `restore()` would otherwise read back. Two details
+follow from the host keeping the transcript:
+
+- **The conversation being left is committed.** A switch hands the next
+  conversation to a different OpenViking session, so a tail left pending would
+  never be committed by anything. The commit runs at the boundary instead, the
+  same way every other OpenViking plugin commits when a conversation ends. A
+  server answer of "nothing new to archive" is not an error.
+- **The cleared prefix is not re-captured.** A `/clear` leaves the dropped turns
+  in the branch, so the new session's capture resumes *after* the marker. The
+  pre-clear turns belong to the session that was just committed; sending them
+  again would extract the same memories twice.
 
 ### Subagents
 

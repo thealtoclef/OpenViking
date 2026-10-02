@@ -10,7 +10,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { lastSessionId, withExtension } from "./support/pi-harness.mjs";
+import { addedOf, lastSessionId, withExtension } from "./support/pi-harness.mjs";
 
 test("a session switch rebinds the OpenViking session to the new conversation", async (t) => {
   await withExtension(t, async ({ handlers, session, statuses, turn, ctx, shutdown }) => {
@@ -116,6 +116,47 @@ test("the same clear marker does not rebind on every turn", async (t) => {
     await turn("next turn");
     await turn("another turn");
     assert.equal(lastSessionId(statuses), "pi-host-A__2", "the marker is handled once, not per turn");
+    await shutdown();
+  });
+});
+
+test("a turn captured before the clear is not captured again after it", async (t) => {
+  await withExtension(t, async ({ session, turn, ctx, handlers, server, statuses, shutdown }) => {
+    await turn("first");
+    await turn("second");
+
+    // `/clear` keeps the branch — the host only appends a marker — so the
+    // capture watermark must resume *after* the marker. Resetting it to zero
+    // re-sends the cleared prefix into the session that follows and extracts
+    // the same memories twice.
+    session.branch = [
+      { id: "m1", type: "message", message: { role: "user", content: "first", timestamp: 1 } },
+      { id: "m2", type: "message", message: { role: "assistant", content: "one", timestamp: 2 } },
+      { id: "m3", type: "message", message: { role: "user", content: "second", timestamp: 3 } },
+      { id: "m4", type: "message", message: { role: "assistant", content: "two", timestamp: 4 } },
+      { id: "b1", type: "reset_boundary" },
+    ];
+    statuses.length = 0;
+    await turn("after the clear");
+
+    // The turn that follows the clear lands after the marker.
+    session.branch = [
+      ...session.branch,
+      { id: "m5", type: "message", message: { role: "user", content: "after the clear", timestamp: 5 } },
+      { id: "m6", type: "message", message: { role: "assistant", content: "three", timestamp: 6 } },
+    ];
+    await handlers.get("turn_end")({ type: "turn_end" }, ctx());
+
+    // Exactly this turn's two payloads. Without the marker-aware watermark the
+    // four entries before the clear would be re-sent as well.
+    assert.equal(addedOf(statuses), 2, JSON.stringify(statuses));
+
+    // And the conversation being left is archived, not abandoned: nothing would
+    // otherwise commit the tail of a session the next one replaces.
+    assert.ok(
+      server.requests.some((request) => /\/commit$/.test(request)),
+      JSON.stringify(server.requests),
+    );
     await shutdown();
   });
 });

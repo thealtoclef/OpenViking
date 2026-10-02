@@ -58,12 +58,14 @@ const MANAGED_ENV = [
 
 async function startServer() {
   const initializes = [];
+  const requests = [];
   const gate = { health: null };
   const server = createServer((req, res) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", async () => {
       const path = (req.url || "").split("?")[0];
+      requests.push(`${req.method} ${path}`);
       if (path === "/mcp") {
         let method = null;
         try {
@@ -88,6 +90,7 @@ async function startServer() {
   return {
     url: `http://127.0.0.1:${port}`,
     initializes,
+    requests,
     gate,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
@@ -215,4 +218,11 @@ export function lastSessionId(statuses) {
   const line = statuses.at(-1)?.[1] ?? "";
   const segment = (line.split(" · ").at(-1) ?? "").trim();
   return segment === "none" ? "" : segment;
+}
+
+/** Payloads the status line last reported as added this turn. */
+export function addedOf(statuses) {
+  const line = statuses.at(-1)?.[1] ?? "";
+  const match = line.match(/↩(\d+)/);
+  return match ? Number(match[1]) : -1;
 }

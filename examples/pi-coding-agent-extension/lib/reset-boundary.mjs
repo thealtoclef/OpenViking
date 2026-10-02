@@ -12,18 +12,24 @@
 export const RESET_BOUNDARY_ENTRY_TYPE = "reset_boundary";
 
 /**
- * The newest `/clear` marker's entry id, or null when the branch has none.
- * Ids survive restarts and branch navigation, so they are safe to remember.
+ * The newest `/clear` marker: its entry id and its index in the branch.
+ *
+ * The index matters as much as the id. Capture and takeover watermark the
+ * branch by position, and everything before the marker belongs to the
+ * conversation the clear dropped — re-capturing it into the session that
+ * follows extracts the same memories a second time. The id is what survives
+ * restarts and branch navigation, so it is what a caller remembers between
+ * turns.
  */
-export function latestResetBoundaryId(entries) {
+export function latestResetBoundary(entries) {
   const list = Array.isArray(entries) ? entries : [];
   for (let i = list.length - 1; i >= 0; i--) {
     const entry = list[i];
     if (entry?.type === RESET_BOUNDARY_ENTRY_TYPE && typeof entry.id === "string" && entry.id) {
-      return entry.id;
+      return { id: entry.id, index: i };
     }
   }
-  return null;
+  return { id: null, index: -1 };
 }
 
 /**
@@ -36,7 +42,7 @@ export function latestResetBoundaryId(entries) {
  * healthy session. Every later look reports a genuinely new marker.
  */
 export function resetBoundaryChanged(lastSeenId, entries) {
-  const id = latestResetBoundaryId(entries);
-  if (lastSeenId === undefined) return { id, changed: false };
-  return { id, changed: id !== null && id !== lastSeenId };
+  const boundary = latestResetBoundary(entries);
+  if (lastSeenId === undefined) return { ...boundary, changed: false };
+  return { ...boundary, changed: boundary.id !== null && boundary.id !== lastSeenId };
 }

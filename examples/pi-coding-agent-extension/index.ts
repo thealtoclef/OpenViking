@@ -177,8 +177,15 @@ export default async function (pi: ExtensionAPI) {
    */
   const flushCurrent = async (ctx: unknown): Promise<void> => {
     if (!connected || bypassed) return;
+    // The conversation is ending here, so archive its tail instead of leaving
+    // it pending for a session nothing will revisit: a switch binds the next
+    // conversation to a different OpenViking session, and what stayed pending
+    // would never be committed. Every other OpenViking plugin commits at its
+    // end-of-conversation boundary for the same reason. A commit the server
+    // answers "nothing new to archive / all within keep window" is not an
+    // error, and a failed one is queued for retry like any other write.
     try {
-      await sync.commitIfNeeded();
+      await sync.commit();
       if (config.takeoverEnabled) await takeover.shutdown();
     } catch (error) {
       logger.logError("session_flush", error);
@@ -409,6 +416,10 @@ export default async function (pi: ExtensionAPI) {
       await flushCurrent(ctx);
       resetSessionState("clear");
       clearGeneration = boundary.id;
+      // Only what follows the marker belongs to the new conversation. The
+      // prefix it cleared was just archived into the session before this one,
+      // so capturing it again would extract the same memories twice.
+      sync.restoreWatermark(boundary.index + 1);
     }
     seenResetBoundaryId = boundary.id;
 
