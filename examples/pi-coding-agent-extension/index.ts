@@ -23,6 +23,7 @@ import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { isBypassed } from "./shared/session-model.mjs";
 import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-guard-adapter.mjs";
 import { appendSystemPrompt } from "./lib/system-prompt.mjs";
+import { resolveContextMessageIds } from "./lib/context-message-ids.mjs";
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
 import { registerMcpTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
@@ -302,37 +303,12 @@ export default async function (pi: ExtensionAPI) {
     // still receives current-query memory, without blocking user-message UI.
     await recall.searchPending();
 
-    // The entry IDs are an optional optimization for replaying the recall
-    // ledger. Compatible hosts may omit buildContextEntries(), so fail closed
-    // to nullable IDs rather than guessing from another SessionManager API.
+    // The entry IDs let the recall ledger replay an injected block onto the
+    // historical message it was sent with, keeping the provider prompt-prefix
+    // cache stable. The mapping differs per host (projected context on pi, raw
+    // branch on omp), so it lives in one helper.
     const sessionManager = ctx.sessionManager;
-    const entries = typeof sessionManager?.buildContextEntries === "function"
-      ? sessionManager.buildContextEntries()
-      : [];
-    const userEntryIds = entries
-      .filter((entry: unknown): entry is { id?: unknown; type: "message"; message: { role: "user" } } => {
-        if (!entry || typeof entry !== "object") return false;
-        if (!("type" in entry) || !("message" in entry)) return false;
-        const type = entry.type;
-        const message = entry.message;
-        return type === "message" &&
-          !!message &&
-          typeof message === "object" &&
-          "role" in message &&
-          message.role === "user";
-      })
-      .map((entry): string | undefined =>
-        typeof entry.id === "string" ? entry.id : undefined
-      );
-    const messageIds = new WeakMap<object, string>();
-    let userIndex = 0;
-    for (const message of event.messages as any[]) {
-      if (message?.role !== "user") continue;
-      const entryId = userEntryIds[userIndex++];
-      if (entryId && typeof message === "object") {
-        messageIds.set(message, entryId);
-      }
-    }
+    const messageIds = resolveContextMessageIds(event.messages as object[], sessionManager);
 
     // Takeover's boundary is a branch entry id; it maps it onto these messages
     // through pi's context projection of the branch.
