@@ -1,0 +1,60 @@
+name: Publish pi-openviking
+
+# Publishes `@thealtoclef/pi-openviking` from a fork of volcengine/OpenViking.
+#
+# The extension lives at examples/pi-coding-agent-extension, whose package.json
+# is upstream's own (private, versioned with the server). The publishable
+# manifest is an overlay written by publish/stage.mjs, so upstream's file never
+# carries release-only fields and a rebase cannot conflict on them.
+#
+# `if:` deliberately matches a fork, not the upstream repository: an upstream
+# push must never publish this scope. Manual dispatch only, because the version
+# is CalVer chosen by hand (`2026.9.4` was the last release).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CalVer release version (YYYY.M.N), e.g. 2026.10.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: github.repository != 'volcengine/OpenViking'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      # `npm ci` needs the lockfile, which the extension keeps beside its own
+      # manifest; the overlay manifest is written later and does not touch it.
+      - name: Install the extension's dependencies
+        run: npm ci --prefix examples/pi-coding-agent-extension --ignore-scripts
+
+      # Generates shared/, runs the extension's suite against the source tree,
+      # stages the publishable copy with the overlay manifest, and prints the
+      # exact tarball contents.
+      - name: Stage and validate
+        run: node examples/pi-coding-agent-extension/publish/stage.mjs --version "${{ inputs.version }}"
+
+      - name: Publish
+        working-directory: dist/pi-openviking-stage/pi-openviking
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if npm view "$(node -p "require('./package.json').name")@$(node -p "require('./package.json').version")" version >/dev/null 2>&1; then
+            echo "::notice::already published; nothing to do"
+            exit 0
+          fi
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          fi
+          npm publish --access public --provenance --tag latest

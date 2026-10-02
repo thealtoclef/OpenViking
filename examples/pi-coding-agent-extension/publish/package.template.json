@@ -1,0 +1,44 @@
+{
+  "name": "@thealtoclef/pi-openviking",
+  "version": "0.0.0",
+  "private": false,
+  "description": "OpenViking context and memory extension for the pi and omp coding agents",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0"
+  },
+  "files": [
+    "index.ts",
+    "client.ts",
+    "config.ts",
+    "recall.ts",
+    "sync.ts",
+    "takeover.ts",
+    "tools.ts",
+    "lib",
+    "shared",
+    "skills",
+    "README.md"
+  ],
+  "omp": {
+    "extensions": [
+      "index.ts"
+    ]
+  },
+  "pi": {
+    "extensions": [
+      "index.ts"
+    ]
+  },
+  "keywords": [
+    "pi",
+    "omp",
+    "openviking",
+    "memory",
+    "extension"
+  ]
+}
