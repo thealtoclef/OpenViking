@@ -158,6 +158,7 @@ export class TakeoverCore {
   >;
   shutdown(): Promise<void>;
   resetBoundary(reason?: string): void;
+  resetSession(reason?: string): void;
   truncatedOverview(): string;
   recoveryHint(archiveUri?: string, historyUri?: string): string;
   recordCaptureGap(): void;

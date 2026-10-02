@@ -25,6 +25,7 @@ import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-gua
 import { appendSystemPrompt } from "./lib/system-prompt.mjs";
 import { resolveContextMessageIds } from "./lib/context-message-ids.mjs";
 import { isOmpHost } from "./lib/host-adapter.mjs";
+import { resetBoundaryChanged } from "./lib/reset-boundary.mjs";
 import { admitContextToolResults, resolveContextWindow } from "./lib/tool-admission.mjs";
 import type { TakeoverMessage } from "./lib/takeover-core.mjs";
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
@@ -103,6 +104,50 @@ export default async function (pi: ExtensionAPI) {
   let compacted = false;
   let started = false;
   let startPromise: Promise<void> | null = null;
+  /** Host session this instance's state belongs to; null before the first start. */
+  let sessionOwnerId: string | null = null;
+  /** The newest `/clear` marker this instance has handled; undefined until first observed. */
+  let seenResetBoundaryId: string | null | undefined;
+  /** Session-id suffix for the post-`/clear` conversation, until the next switch. */
+  let clearGeneration = "";
+
+  /**
+   * Drop the conversation this instance was tracking.
+   *
+   * Order matters: the sync watermark first, because takeover's persisted state
+   * reads the live watermark when it writes the reset, and a stale watermark
+   * would be restored onto the new conversation.
+   */
+  const resetSessionState = (reason: string): void => {
+    started = false;
+    startPromise = null;
+    profileBlock = "";
+    archiveOverview = "";
+    compacted = false;
+    sync.reset();
+    recall.reset();
+    takeover.resetSession(reason);
+    sessionOwnerId = null;
+    // A new conversation has not been observed yet, so its first look at the
+    // branch records rather than acts.
+    seenResetBoundaryId = undefined;
+    clearGeneration = "";
+  };
+
+  /**
+   * Commit whatever the conversation being left behind had synced but not
+   * committed. Every completed turn was already synced by `turn_end`, so this
+   * only covers the tail; a failure is logged and never blocks the switch.
+   */
+  const flushCurrent = async (ctx: unknown): Promise<void> => {
+    if (!connected || bypassed) return;
+    try {
+      await sync.commitIfNeeded();
+      if (config.takeoverEnabled) await takeover.shutdown();
+    } catch (error) {
+      logger.logError("session_flush", error);
+    }
+  };
 
   /**
    * Take a finished handshake: register what the server listed, or report the
@@ -183,22 +228,30 @@ export default async function (pi: ExtensionAPI) {
 
       // Ensure OV session
       const piSessionId = ctx.sessionManager.getSessionId();
-      recall.openLedger(piSessionId);
-      const ok = await sync.ensureSession(piSessionId);
+      const ok = await sync.ensureSession(piSessionId, clearGeneration);
       if (!ok) {
         if (config.logLevel !== "silent") {
           ctx.ui.notify("OpenViking: failed to create session", "error");
         }
         return;
       }
+      // Keyed by the OpenViking session id, so a `/clear` gets its own ledger
+      // along with its own memory stream: replaying the dropped conversation's
+      // injected blocks onto the new one would push the provider prefix apart.
+      recall.openLedger(sync.sessionId ?? piSessionId);
 
       // Restore takeover state — sync watermark, pending archive and capture
       // gap — before replaying any queued messages, so recovery and replay
       // cannot disagree about what has been delivered (plan §4).
+      //
+      // A `/clear` is the exception: its conversation was just reset, and the
+      // newest entry the branch still holds is the reset we persisted. Reading
+      // it back can race the append, so the fresh state is authoritative and
+      // restore is skipped rather than re-read.
       const branch = typeof ctx.sessionManager.getBranch === "function"
         ? ctx.sessionManager.getBranch()
         : [];
-      if (config.takeoverEnabled) {
+      if (config.takeoverEnabled && !clearGeneration) {
         takeover.restore(branch);
         sync.restoreWatermark(takeover.state.syncedEntryCount);
       }
@@ -223,6 +276,7 @@ export default async function (pi: ExtensionAPI) {
       updateStatus(ctx, connected, 0, sync.sessionId, config, takeover.state, toolsReady);
 
       started = true;
+      sessionOwnerId = piSessionId;
       if (config.logLevel === "info") {
         ctx.ui.notify(`OpenViking connected (${piSessionId.slice(0, 8)}...)`, "info");
       }
@@ -233,8 +287,38 @@ export default async function (pi: ExtensionAPI) {
     return startPromise;
   };
 
+  // --- session_before_switch ---
+  //
+  // omp emits this before it moves to another conversation, while the current
+  // one is still intact — the only chance to commit it. pi does not emit it at
+  // all (it tears the runtime down and re-emits session_start instead), so this
+  // is a no-op there. Never fatal: a failed commit must not block the switch.
+  pi.on("session_before_switch", async (_event, ctx) => {
+    await flushCurrent(ctx);
+  });
+
+  // --- session_switch ---
+  //
+  // omp emits this after the switch, on the same extension runner, with the
+  // SessionManager already mutated in place to the new conversation. Without
+  // this the new conversation is captured into the old OpenViking session and
+  // the dropped one's boundary, watermark and ledger leak into it. pi has no
+  // such event; its path is the session_start safety net below.
+  pi.on("session_switch", async (_event, ctx) => {
+    resetSessionState("switch");
+    await start(ctx);
+  });
+
   // --- session_start ---
   pi.on("session_start", async (event, ctx) => {
+    // A host that rebuilds its runtime per conversation re-emits this event
+    // instead of session_switch. A changed id means the state in flight belongs
+    // to a conversation that is no longer current, so drop it before starting.
+    const sessionId = String(ctx?.sessionManager?.getSessionId?.() ?? "");
+    if (sessionOwnerId && sessionId && sessionOwnerId !== sessionId) {
+      resetSessionState("session_start");
+    }
+
     // Fire-and-forget: the OV chain (health check, session ensure, profile
     // build) costs ~2s against the remote server; blocking session_start on it
     // delays every pi startup. start() is memoized via startPromise, so
@@ -257,6 +341,22 @@ export default async function (pi: ExtensionAPI) {
     // costs the first turn a second handshake budget before recall is even
     // queued, for an answer start() already has.
     const wasStarted = started;
+
+    // `/clear` keeps the session (same id, same transcript) and appends a reset
+    // marker; no lifecycle event fires for it. Without this the boundary points
+    // at entries the context no longer holds, so takeover silently stops
+    // trimming, and the cleared conversation is captured into the session it
+    // just dropped.
+    const branch = typeof ctx.sessionManager.getBranch === "function"
+      ? ctx.sessionManager.getBranch()
+      : [];
+    const boundary = resetBoundaryChanged(seenResetBoundaryId, branch);
+    if (boundary.changed) {
+      await flushCurrent(ctx);
+      resetSessionState("clear");
+      clearGeneration = boundary.id;
+    }
+    seenResetBoundaryId = boundary.id;
 
     // session_start doesn't fire for pi -c continuations.
     await start(ctx);

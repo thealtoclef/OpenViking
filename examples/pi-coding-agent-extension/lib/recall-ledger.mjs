@@ -82,6 +82,20 @@ export class RecallLedger {
     return this.loaded && this.sessionId !== null;
   }
 
+  /**
+   * Unbind from the current session without writing.
+   *
+   * Entries are dropped, not flushed: they belong to a conversation that no
+   * longer exists, so replaying them onto the next one would inject blocks the
+   * provider never sent. The file on disk stays, keyed by the old session id.
+   */
+  reset() {
+    this.sessionId = null;
+    this.entries.clear();
+    this.loaded = false;
+    this.dirty = false;
+  }
+
   get(key) {
     return this.entries.get(key) ?? null;
   }

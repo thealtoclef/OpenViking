@@ -75,12 +75,35 @@ export class SyncManager {
     this.syncedEntryCount = next;
   }
 
-  async ensureSession(piSessionId: string): Promise<boolean> {
+  /**
+   * Bind this instance to the OpenViking session for a host session.
+   *
+   * `suffix` distinguishes conversations that share one host session id — the
+   * post-`/clear` context. The shared derivation formats it as
+   * `pi-<hostId>__<suffix>`, the same isolation shape the Claude Code plugin
+   * uses for its subagents, so a cleared context gets its own memory stream
+   * instead of being captured into the one it just dropped.
+   */
+  async ensureSession(piSessionId: string, suffix = ""): Promise<boolean> {
     if (this.ovSessionId) return true;
 
-    const id = deriveHarnessSessionId("pi-", piSessionId);
+    const id = deriveHarnessSessionId("pi-", piSessionId, suffix);
     this.ovSessionId = id;
     return true;
+  }
+
+  /**
+   * Forget the conversation this instance was bound to.
+   *
+   * Called on a session switch and on `/clear`. The pending queue is keyed by
+   * session id on disk and is deliberately not touched: entries queued for the
+   * old session are still deliverable to it, and replay filters by session.
+   */
+  reset(): void {
+    this.ovSessionId = null;
+    this.syncedEntryCount = 0;
+    this.droppedForever = 0;
+    this.lastCommitFailure = "";
   }
 
   async replayPending(): Promise<void> {

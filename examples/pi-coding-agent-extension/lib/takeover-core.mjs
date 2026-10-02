@@ -1025,6 +1025,42 @@ export class TakeoverCore {
     this.boundaryApplied = false;
   }
 
+  /**
+   * Drop everything this instance learned about a conversation that no longer
+   * exists (a session switch, or a `/clear`).
+   *
+   * `resetBoundary()` is not enough: `restore()` scans the branch backwards for
+   * the newest takeover entry, so a stale archive overview, pending token
+   * count, or pending archive would be restored onto the new conversation —
+   * and a `/clear` leaves that entry in the same transcript. Persisting the
+   * zeroed state is what makes the reset stick, because it becomes the newest
+   * entry `restore()` finds.
+   *
+   * Call after the sync watermark is zeroed: `persistedState()` reads the live
+   * watermark from `io.getWatermark()`.
+   */
+  resetSession(reason = "session") {
+    this.coveredThroughEntryId = "";
+    this.coveredUserTurns = 0;
+    this.overview = "";
+    this.pendingTokens = 0;
+    this.lastSeenUserTurns = 0;
+    this.syncedEntryCount = 0;
+    this.committing = false;
+    this.archiveUri = "";
+    this.historyUri = "";
+    this.pendingArchive = null;
+    this.captureGap = false;
+    this.legacyBoundary = null;
+    this.boundaryApplied = false;
+    this.lastFailure = "";
+    // Force the write: zeroes that happen to match the last persisted state
+    // would otherwise be skipped, leaving the stale entry as the newest one.
+    this.lastPersisted = "";
+    this.persist();
+    this.log(`takeover: session state reset (${reason})`);
+  }
+
   truncatedOverview() {
     const raw = String(this.overview || "");
     const truncated = truncateToTokens(raw, this.config.takeoverOverviewBudget);

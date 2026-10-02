@@ -37,6 +37,18 @@ export class RecallManager {
     this.ledger?.open(piSessionId);
   }
 
+  /**
+   * Drop the conversation this instance was recalling against: the cached
+   * block, the queued prompt, and the injection ledger binding. Without this a
+   * session switch or `/clear` replays the previous conversation's injected
+   * blocks onto the new one, and the provider prefix diverges.
+   */
+  reset(): void {
+    this.cache = { block: null, promptText: "" };
+    this.pendingPrompt = "";
+    this.ledger?.reset();
+  }
+
   queueSearch(userQuery: string): void {
     this.pendingPrompt = userQuery;
   }

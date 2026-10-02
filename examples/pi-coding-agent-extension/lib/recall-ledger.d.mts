@@ -3,6 +3,7 @@ export declare function ledgerKey(messageIdentity: string, originalContent: stri
 export declare class RecallLedger {
   constructor(dir?: string);
   open(sessionId: string): void;
+  reset(): void;
   get isOpen(): boolean;
   get(key: string): string | null;
   record(key: string, block: string): void;
