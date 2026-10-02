@@ -1226,3 +1226,38 @@ test("an unchanged reset is still written, so zeroes are not skipped", () => {
   core.resetSession("clear");
   assert.equal(calls.persisted.length, before + 1);
 });
+
+test("projectContextEntries drops everything before a /clear marker", () => {
+  const cleared = branchOf(
+    user("dropped user"),
+    assistant("dropped answer"),
+    { type: "reset_boundary" },
+    user("kept user"),
+  );
+  const projected = projectContextEntries(cleared);
+  // The marker itself carries no message; what matters is that the cleared
+  // turns are gone. omp keeps them in the branch but not in the context.
+  assert.deepEqual(
+    projected.filter((entry) => entry.type === "message").map((entry) => flattenContent(entry.message)),
+    ["kept user"],
+  );
+});
+
+test("the newest clear marker wins when a branch carries several", () => {
+  const cleared = branchOf(
+    user("first"),
+    { type: "reset_boundary" },
+    user("second"),
+    { type: "reset_boundary" },
+    user("third"),
+  );
+  const kept = projectContextEntries(cleared)
+    .filter((entry) => entry.type === "message")
+    .map((entry) => flattenContent(entry.message));
+  assert.deepEqual(kept, ["third"]);
+});
+
+test("a branch without a clear marker is projected unchanged", () => {
+  const head = branchOf(user("a"), assistant("b"));
+  assert.deepEqual(projectContextEntries(head).map((entry) => entry.id), head.map((entry) => entry.id));
+});

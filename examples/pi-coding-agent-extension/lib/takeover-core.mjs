@@ -67,9 +67,17 @@ function contextRole(entry) {
  * everything after it remain; entries a context edit removed are dropped.
  * `getBranch()` itself still holds the compacted-away prefix and every custom
  * entry, so turn positions must never be counted on it directly.
+ *
+ * omp's `/clear` marker is honored the same way: it keeps the session and the
+ * transcript file, so the branch still holds the cleared conversation, while
+ * the context the model sees starts at the marker. A boundary that pointed into
+ * the dropped prefix would otherwise look present here and be sent to the
+ * provider as though the cleared turns were still there.
  */
 export function projectContextEntries(branch) {
-  const path = (Array.isArray(branch) ? branch : []).filter((entry) => entry && typeof entry === "object");
+  let path = (Array.isArray(branch) ? branch : []).filter((entry) => entry && typeof entry === "object");
+  const resetIdx = path.reduce((latest, entry, i) => (entry.type === "reset_boundary" ? i : latest), -1);
+  if (resetIdx >= 0) path = path.slice(resetIdx);
   let compactionIdx = -1;
   for (let i = path.length - 1; i >= 0; i--) {
     if (path[i].type === "compaction") {
@@ -472,7 +480,15 @@ export class TakeoverCore {
     const cut = this.locateCut(list, entries);
     if (cut <= 0) {
       if (this.boundaryApplied) {
-        this.log("takeover: covered prefix is not in the active context; sending it in full");
+        // Once, on the transition: trimming stops here until the boundary is
+        // seen again, and the reason decides whether that is expected (the host
+        // dropped the entry from the context) or a mapping problem.
+        const present = entries.some((entry) => entry?.id === this.coveredThroughEntryId);
+        this.log(
+          "takeover: covered prefix is not in the active context; sending it in full" +
+            ` (boundary ${present ? "present in the projection but unmapped to a message" : "absent from the projection"},` +
+            ` ${entries.length} projected entries, ${list.length} messages)`,
+        );
       }
       this.boundaryApplied = false;
       return list;
