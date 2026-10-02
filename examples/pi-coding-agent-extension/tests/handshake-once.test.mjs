@@ -286,3 +286,26 @@ test("/viking starts the session when session_start was never delivered", async 
     assert.equal(server.initializes.length, 1, "start() is memoized; a second status call adds nothing");
   });
 });
+
+test("oversized tool results are projected in the context hook", async (t) => {
+  await withExtension(t, async ({ handlers, turn, ctx, shutdown }) => {
+    await turn("hello");
+    assert.ok(handlers.get("context"), "the context hook is registered");
+
+    // ~100k tokens of bash output, against a cap of 5% of the 262144-token
+    // window reported by the fake ctx (clamped to the 8192..50000 band).
+    const huge = "x".repeat(400000);
+    const messages = [
+      { role: "user", content: "run it", timestamp: 1 },
+      { role: "toolResult", toolCallId: "call-1", toolName: "bash", content: [{ type: "text", text: huge }], timestamp: 2 },
+    ];
+    const result = await handlers.get("context")({ type: "context", messages }, ctx);
+    const out = result?.messages ?? messages;
+    const text = out[1].content[0].text;
+
+    assert.ok(text.length < huge.length, "the oversized result was projected");
+    assert.match(text, /\[tool result projected: kept \d+ of ~\d+ tokens\]/);
+    assert.equal(out.length, 2);
+    await shutdown();
+  });
+});

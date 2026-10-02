@@ -154,6 +154,22 @@ export const KNOBS = [
   { name: "commitTurnThreshold", type: "int", default: 8, min: 1, max: 1000, env: "OPENVIKING_COMMIT_TURN_THRESHOLD", capability: "capture" },
   { name: "autoCommitOnCompact", type: "bool", default: true, env: "OPENVIKING_AUTO_COMMIT_ON_COMPACT", capability: "capture" },
   { name: "writePathAsync", type: "bool", default: true, env: "OPENVIKING_WRITE_PATH_ASYNC", capability: "capture" },
+  // Admission caps a single provider-facing tool result so one large bash/read
+  // output cannot overflow a context window that takeover bounds by turns
+  // rather than tokens. Read by the pi extension's context hook; the other
+  // harnesses declare nothing and keep their host's own truncation.
+  { name: "toolAdmissionEnabled", type: "bool", default: true, env: "OPENVIKING_TOOL_ADMISSION_ENABLED", capability: "capture" },
+  {
+    name: "toolAdmissionCapFraction",
+    type: "number",
+    default: 0.05,
+    min: 0.001,
+    max: 1,
+    env: "OPENVIKING_TOOL_ADMISSION_CAP_FRACTION",
+    capability: "capture",
+  },
+  { name: "toolAdmissionMinTokens", type: "int", default: 8192, min: 256, max: 500000, env: "OPENVIKING_TOOL_ADMISSION_MIN_TOKENS", capability: "capture" },
+  { name: "toolAdmissionMaxTokens", type: "int", default: 50000, min: 256, max: 500000, env: "OPENVIKING_TOOL_ADMISSION_MAX_TOKENS", capability: "capture" },
 
   // ── session lifecycle ─────────────────────────────────────────────────
   { name: "noAutoInject", type: "bool", default: false, env: "OPENVIKING_NO_AUTO_INJECT", capability: "session" },

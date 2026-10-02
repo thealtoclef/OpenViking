@@ -25,6 +25,8 @@ import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-gua
 import { appendSystemPrompt } from "./lib/system-prompt.mjs";
 import { resolveContextMessageIds } from "./lib/context-message-ids.mjs";
 import { isOmpHost } from "./lib/host-adapter.mjs";
+import { admitContextToolResults, resolveContextWindow } from "./lib/tool-admission.mjs";
+import type { TakeoverMessage } from "./lib/takeover-core.mjs";
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
 import { registerMcpTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
@@ -313,21 +315,33 @@ export default async function (pi: ExtensionAPI) {
     // and fails open before the watchdog instead of taking the turn with it.
     await recall.searchPending(isOmpHost(ctx) ? OMP_CONTEXT_DEADLINE_MS : undefined);
 
+    // Takeover bounds history by user turns, not tokens, so one oversized tool
+    // result inside the retained tail can still overflow the window even
+    // though the archived span was replaced by an overview. Project those
+    // results first; only toolResult messages are rewritten, so the identity
+    // mapping below is unaffected.
+    const admitted = admitContextToolResults(event.messages, resolveContextWindow(ctx), {
+      enabled: config.toolAdmissionEnabled,
+      capFraction: config.toolAdmissionCapFraction,
+      minTokens: config.toolAdmissionMinTokens,
+      maxTokens: config.toolAdmissionMaxTokens,
+    });
+
     // The entry IDs let the recall ledger replay an injected block onto the
     // historical message it was sent with, keeping the provider prompt-prefix
     // cache stable. The mapping differs per host (projected context on pi, raw
     // branch on omp), so it lives in one helper.
     const sessionManager = ctx.sessionManager;
-    const messageIds = resolveContextMessageIds(event.messages as object[], sessionManager);
+    const messageIds = resolveContextMessageIds(admitted, sessionManager);
 
     // Takeover's boundary is a branch entry id; it maps it onto these messages
     // through pi's context projection of the branch.
     const afterTakeover = config.takeoverEnabled
       ? takeover.transformContext(
-          event.messages as any,
+          asTakeoverMessages(admitted),
           typeof sessionManager?.getBranch === "function" ? sessionManager.getBranch() : [],
         )
-      : event.messages;
+      : admitted;
     const messages = recall.injectRecall(
       afterTakeover,
       (message) => messageIds.get(message) ?? null,
@@ -584,4 +598,15 @@ function updateStatus(
   } catch {
     // Best effort; pi API shape may vary across fast-moving versions.
   }
+}
+
+/**
+ * The host's context messages in the loose shape the takeover transform takes.
+ *
+ * `TakeoverCore` predates the host typings and consumes a structural
+ * `TakeoverMessage`; the host's own array is passed through, never copied, so
+ * message identity (and the recall ledger's WeakMap) survives the boundary.
+ */
+function asTakeoverMessages(messages: readonly object[]): TakeoverMessage[] {
+  return messages as TakeoverMessage[];
 }

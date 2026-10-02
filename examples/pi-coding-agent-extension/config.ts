@@ -47,6 +47,11 @@ export interface OVConfig {
   takeoverOverviewBudget: number;
   takeoverOverviewPollMs: number;
   takeoverOverviewPollMax: number;
+  /** Provider-facing tool-result admission (context hook, before takeover). */
+  toolAdmissionEnabled: boolean;
+  toolAdmissionCapFraction: number;
+  toolAdmissionMinTokens: number;
+  toolAdmissionMaxTokens: number;
   captureToolResults: boolean;
   captureMode: "semantic" | "keyword";
   captureMaxLength: number;
@@ -86,6 +91,10 @@ export function loadConfig(cwd: string = process.cwd()): OVConfig {
     // under `actor` scope still reach memories written before the git-derived
     // peer replaced the path-derived one.
     peerId: config.effectivePeer.peerId,
+    // The schema clamps each knob on its own, so it cannot express this: a
+    // ceiling below the floor would silently invert the clamp inside
+    // `resolveToolResultAdmissionCapTokens` and cap every result at the floor.
+    toolAdmissionMaxTokens: Math.max(config.toolAdmissionMaxTokens, config.toolAdmissionMinTokens),
   } as OVConfig;
 }
 
