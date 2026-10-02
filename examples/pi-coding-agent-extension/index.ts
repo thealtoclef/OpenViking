@@ -83,7 +83,7 @@ export default async function (pi: ExtensionAPI) {
   // Re-read credentials before connecting or invoking a tool.
   const bridge = mcpEnabled
     ? createMcpBridge({
-      readConfig: () => buildBridgeProxyConfig(loadConfig(cwd)),
+      readConfig: () => buildBridgeProxyConfig(loadConfig(hostCwd)),
       // No "memory" in the name: every plugin identity is moving to plain
       // `openviking`, and a new identifier starts out on the new spelling.
       clientInfo: { name: "openviking-pi", version: EXTENSION_VERSION },
@@ -117,6 +117,14 @@ export default async function (pi: ExtensionAPI) {
     __OPENVIKING_PI_INSTANCE_COUNTS__?: Map<string, number>;
   };
   const instanceCounts = (markerHost.__OPENVIKING_PI_INSTANCE_COUNTS__ ??= new Map<string, number>());
+  /**
+   * Whether this instance holds a claim on the probe.
+   *
+   * One claim per instance, not per conversation: a session switch inside the
+   * same instance starts again and must not count twice, or the count never
+   * returns to zero and the probe is never removed.
+   */
+  let markerClaimed = false;
   const toolNames: string[] = [];
   let toolFailureNotified = false;
   let compacted = false;
@@ -128,6 +136,16 @@ export default async function (pi: ExtensionAPI) {
   let seenResetBoundaryId: string | null | undefined;
   /** Session-id suffix for the post-`/clear` conversation, until the next switch. */
   let clearGeneration = "";
+  /**
+   * The directory this instance currently answers for.
+   *
+   * `process.cwd()` is the host process', which is the parent's even while a
+   * subagent runs in a worktree or another directory. Peer identity is
+   * unaffected — it derives from the repository's git origin, and a worktree
+   * shares it — but the workspace override file and the bypass patterns are
+   * path-based, so they have to see the session's own directory.
+   */
+  let hostCwd = process.cwd();
 
   /**
    * Drop the conversation this instance was tracking.
@@ -218,6 +236,10 @@ export default async function (pi: ExtensionAPI) {
     if (startPromise) return startPromise;
 
     startPromise = (async () => {
+      // Answer for this session's own directory from here on. Read before the
+      // bypass check, which is path-based.
+      hostCwd = String(ctx?.cwd ?? ctx?.sessionManager?.getCwd?.() ?? "").trim() || process.cwd();
+
       // A spawned session is excluded when the shared knob asks for it (default
       // false, matching every harness that can see subagents). Returning before
       // any state is bound keeps the subagent off the OpenViking session list
@@ -229,7 +251,7 @@ export default async function (pi: ExtensionAPI) {
       }
 
       // Bypass check
-      if (isBypassed(config, { cwd: process.cwd() })) {
+      if (isBypassed(config, { cwd: hostCwd })) {
         bypassed = true;
         started = true;
         return;
@@ -249,8 +271,11 @@ export default async function (pi: ExtensionAPI) {
       // session is live, independently of any tool: a /mcp 401/403 leaves this
       // extension with zero tools while it still writes the OpenViking session,
       // and that is exactly the case the fork must not join.
-      markerHost.__OPENVIKING_PI_EXTENSION__ = marker;
-      instanceCounts.set(EXTENSION_DIR, (instanceCounts.get(EXTENSION_DIR) ?? 0) + 1);
+      if (!markerClaimed) {
+        markerClaimed = true;
+        markerHost.__OPENVIKING_PI_EXTENSION__ = marker;
+        instanceCounts.set(EXTENSION_DIR, (instanceCounts.get(EXTENSION_DIR) ?? 0) + 1);
+      }
 
       // Discover tools alongside REST startup; failure leaves REST available.
       const handshake = bridge ? bridge.connect(DEFAULT_HANDSHAKE_BUDGET_MS) : null;
@@ -539,15 +564,22 @@ export default async function (pi: ExtensionAPI) {
   // --- session_shutdown ---
   pi.on("session_shutdown", async (_event, ctx) => {
     closed = true;
-    // Drop this instance's claim on the probe; the last live instance for this
-    // directory removes it, and never one that a different instance installed.
-    const remaining = (instanceCounts.get(EXTENSION_DIR) ?? 1) - 1;
-    if (remaining > 0) {
-      instanceCounts.set(EXTENSION_DIR, remaining);
-    } else {
-      instanceCounts.delete(EXTENSION_DIR);
-      if (markerHost.__OPENVIKING_PI_EXTENSION__ === marker) {
-        delete markerHost.__OPENVIKING_PI_EXTENSION__;
+    // Drop this instance's claim on the probe. The last live instance for this
+    // directory removes it — comparing by directory, not by object identity,
+    // because a second instance may have published its own marker since (a
+    // subagent did), and refusing to clear another instance's marker would
+    // leave a stale one behind after every instance is gone. A marker for a
+    // different directory belongs to someone else and is left alone.
+    if (markerClaimed) {
+      markerClaimed = false;
+      const remaining = (instanceCounts.get(EXTENSION_DIR) ?? 1) - 1;
+      if (remaining > 0) {
+        instanceCounts.set(EXTENSION_DIR, remaining);
+      } else {
+        instanceCounts.delete(EXTENSION_DIR);
+        if (markerHost.__OPENVIKING_PI_EXTENSION__?.dir === EXTENSION_DIR) {
+          delete markerHost.__OPENVIKING_PI_EXTENSION__;
+        }
       }
     }
     // Release MCP requests without preventing the final REST commit.

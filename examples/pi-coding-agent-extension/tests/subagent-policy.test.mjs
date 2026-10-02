@@ -65,3 +65,30 @@ test("a subagent finishing does not clear the parent's coexistence marker", asyn
     assert.equal(globalThis.__OPENVIKING_PI_EXTENSION__, undefined, "the last instance clears it");
   });
 });
+
+test("a spawned session is bypass-evaluated against its own directory", async (t) => {
+  // Bypass patterns match the session's cwd. A subagent working under a
+  // bypassed path must stand down even when the parent's directory is not
+  // bypassed — before the cwd was plumbed, both were judged by the host
+  // process's cwd and the subagent kept talking to OpenViking.
+  await withExtension(t, async ({ statuses, turn, ctx, handlers, shutdown }) => {
+    await turn("explore the repo");
+    assert.equal(lastSessionId(statuses), "pi-host-A", "the parent directory is not bypassed");
+
+    // Same instance, but the next conversation reports the bypassed directory.
+    statuses.length = 0;
+    const vendorCtx = {
+      ...ctx(),
+      cwd: "/work/repo/vendor/generated",
+      sessionManager: {
+        getSessionId: () => "host-vendor",
+        getBranch: () => [],
+        getLeafId: () => "entry-1",
+      },
+    };
+    await handlers.get("session_switch")({ type: "session_switch", reason: "new" }, vendorCtx);
+
+    assert.equal(lastSessionId(statuses), "", "a bypassed directory must not bind an OpenViking session");
+    await shutdown();
+  }, { agent: SUBAGENT, env: { OPENVIKING_BYPASS_SESSION_PATTERNS: "**/vendor/**" } });
+});

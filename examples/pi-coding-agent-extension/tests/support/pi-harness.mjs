@@ -146,7 +146,11 @@ export function fakeCtx(notified = [], statuses = [], session = { id: "host-A", 
 export async function withExtension(t, fn, options = {}) {
   const server = await startServer();
   const dir = await mkdtemp(join(tmpdir(), "ov-pi-handshake-"));
-  const saved = Object.fromEntries(MANAGED_ENV.map((name) => [name, process.env[name]]));
+  // Restore every name this call touches, including the configuration layers a
+  // test passes in: a knob env left behind would silently reconfigure the next
+  // test's instance, which loads configuration at construction.
+  const managed = [...new Set([...MANAGED_ENV, ...Object.keys(options.env ?? {})])];
+  const saved = Object.fromEntries(managed.map((name) => [name, process.env[name]]));
   for (const name of MANAGED_ENV) delete process.env[name];
   process.env.OPENVIKING_CREDENTIAL_SOURCE = "env";
   process.env.OPENVIKING_URL = server.url;
