@@ -24,7 +24,7 @@ import { isBypassed } from "./shared/session-model.mjs";
 import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-guard-adapter.mjs";
 import { appendSystemPrompt } from "./lib/system-prompt.mjs";
 import { resolveContextMessageIds } from "./lib/context-message-ids.mjs";
-import { isOmpHost } from "./lib/host-adapter.mjs";
+import { isOmpHost, isSubagent } from "./lib/host-adapter.mjs";
 import { resetBoundaryChanged } from "./lib/reset-boundary.mjs";
 import { admitContextToolResults, resolveContextWindow } from "./lib/tool-admission.mjs";
 import type { TakeoverMessage } from "./lib/takeover-core.mjs";
@@ -99,6 +99,24 @@ export default async function (pi: ExtensionAPI) {
   let toolsRegistered = false;
   let closed = false;
   const marker = { dir: EXTENSION_DIR };
+  /**
+   * Live instances per extension directory, so the coexistence probe survives
+   * a spawned session.
+   *
+   * omp re-invokes the factory for every subagent, so each one has its own
+   * instance and its own `marker` object while writing the same global. A plain
+   * "delete it on shutdown" therefore let the first subagent to finish clear
+   * the probe the parent still owned, and the experimental context-management
+   * fork would re-engage alongside OpenViking takeover.
+   *
+   * On globalThis because the module can be evaluated once per directory while
+   * several hosts load it, and the probe is process-wide by construction.
+   */
+  const markerHost = globalThis as unknown as {
+    __OPENVIKING_PI_EXTENSION__?: { dir: string };
+    __OPENVIKING_PI_INSTANCE_COUNTS__?: Map<string, number>;
+  };
+  const instanceCounts = (markerHost.__OPENVIKING_PI_INSTANCE_COUNTS__ ??= new Map<string, number>());
   const toolNames: string[] = [];
   let toolFailureNotified = false;
   let compacted = false;
@@ -200,6 +218,16 @@ export default async function (pi: ExtensionAPI) {
     if (startPromise) return startPromise;
 
     startPromise = (async () => {
+      // A spawned session is excluded when the shared knob asks for it (default
+      // false, matching every harness that can see subagents). Returning before
+      // any state is bound keeps the subagent off the OpenViking session list
+      // and, more importantly, stops it publishing the coexistence marker the
+      // parent owns.
+      if (config.skipSubagentSessions && isSubagent(ctx)) {
+        logger.log("subagent", { skipped: true });
+        return;
+      }
+
       // Bypass check
       if (isBypassed(config, { cwd: process.cwd() })) {
         bypassed = true;
@@ -221,7 +249,8 @@ export default async function (pi: ExtensionAPI) {
       // session is live, independently of any tool: a /mcp 401/403 leaves this
       // extension with zero tools while it still writes the OpenViking session,
       // and that is exactly the case the fork must not join.
-      (globalThis as any).__OPENVIKING_PI_EXTENSION__ = marker;
+      markerHost.__OPENVIKING_PI_EXTENSION__ = marker;
+      instanceCounts.set(EXTENSION_DIR, (instanceCounts.get(EXTENSION_DIR) ?? 0) + 1);
 
       // Discover tools alongside REST startup; failure leaves REST available.
       const handshake = bridge ? bridge.connect(DEFAULT_HANDSHAKE_BUDGET_MS) : null;
@@ -510,8 +539,16 @@ export default async function (pi: ExtensionAPI) {
   // --- session_shutdown ---
   pi.on("session_shutdown", async (_event, ctx) => {
     closed = true;
-    if ((globalThis as any).__OPENVIKING_PI_EXTENSION__ === marker) {
-      delete (globalThis as any).__OPENVIKING_PI_EXTENSION__;
+    // Drop this instance's claim on the probe; the last live instance for this
+    // directory removes it, and never one that a different instance installed.
+    const remaining = (instanceCounts.get(EXTENSION_DIR) ?? 1) - 1;
+    if (remaining > 0) {
+      instanceCounts.set(EXTENSION_DIR, remaining);
+    } else {
+      instanceCounts.delete(EXTENSION_DIR);
+      if (markerHost.__OPENVIKING_PI_EXTENSION__ === marker) {
+        delete markerHost.__OPENVIKING_PI_EXTENSION__;
+      }
     }
     // Release MCP requests without preventing the final REST commit.
     if (bridge) {

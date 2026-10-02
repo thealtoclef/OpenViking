@@ -47,6 +47,8 @@ export interface OVConfig {
   takeoverOverviewBudget: number;
   takeoverOverviewPollMs: number;
   takeoverOverviewPollMax: number;
+  /** Shared knob: exclude spawned sessions (omp subagents) from OpenViking. */
+  skipSubagentSessions: boolean;
   /** Provider-facing tool-result admission (context hook, before takeover). */
   toolAdmissionEnabled: boolean;
   toolAdmissionCapFraction: number;

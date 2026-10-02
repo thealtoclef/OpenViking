@@ -15,3 +15,14 @@ export function hasContextProjection(sessionManager) {
 export function isOmpHost(ctx) {
   return !hasContextProjection(ctx?.sessionManager);
 }
+
+/**
+ * True when this extension instance was rebound into a spawned session.
+ *
+ * omp re-invokes the extension factory for every task/eval subagent and `/tan`
+ * clone, handing it an identity of their own; the check is on `kind`, not
+ * `depth`, because a `/tan` clone is a subagent at depth 0.
+ */
+export function isSubagent(ctx) {
+  return ctx?.agent?.kind === "sub";
+}

@@ -120,7 +120,7 @@ export function fakePi() {
  * change them and have the next handler invocation see the change without
  * swapping the context object — exactly what omp does on a session switch.
  */
-export function fakeCtx(notified = [], statuses = [], session = { id: "host-A", branch: [] }) {
+export function fakeCtx(notified = [], statuses = [], session = { id: "host-A", branch: [] }, agent = undefined) {
   return {
     sessionManager: {
       getSessionId: () => session.id,
@@ -132,11 +132,18 @@ export function fakeCtx(notified = [], statuses = [], session = { id: "host-A", 
       setStatus: (...args) => statuses.push(args),
     },
     getContextUsage: () => ({ tokens: 0, contextWindow: 262144, percent: 0 }),
+    ...(agent ? { agent } : {}),
   };
 }
 
-/** Boot one extension instance against a throwaway config and a fake server. */
-export async function withExtension(t, fn) {
+/**
+ * Boot one extension instance against a throwaway config and a fake server.
+ *
+ * `options.env` adds configuration layers before the instance loads (the module
+ * reads configuration once, at construction); `options.agent` gives the context
+ * the host's agent identity, which is how a subagent identifies itself.
+ */
+export async function withExtension(t, fn, options = {}) {
   const server = await startServer();
   const dir = await mkdtemp(join(tmpdir(), "ov-pi-handshake-"));
   const saved = Object.fromEntries(MANAGED_ENV.map((name) => [name, process.env[name]]));
@@ -147,6 +154,9 @@ export async function withExtension(t, fn) {
   process.env.OPENVIKING_CLI_CONFIG_FILE = join(dir, "ovcli.conf");
   process.env.OPENVIKING_CONFIG_FILE = join(dir, "ov.conf");
   process.env.OPENVIKING_PENDING_DIR = join(dir, "pending");
+  for (const [name, value] of Object.entries(options.env ?? {})) {
+    process.env[name] = String(value);
+  }
   await writeFile(join(dir, "ovcli.conf"), JSON.stringify({ plugin: { pi: {} } }), "utf8");
 
   t.after(async () => {
@@ -168,8 +178,8 @@ export async function withExtension(t, fn) {
   await mod.default(pi);
   const notified = [];
   const statuses = [];
-  const session = { id: "host-A", branch: [] };
-  const ctx = () => fakeCtx(notified, statuses, session);
+  const session = options.session ?? { id: "host-A", branch: [] };
+  const ctx = () => fakeCtx(notified, statuses, session, options.agent);
   return fn({
     server,
     handlers,
