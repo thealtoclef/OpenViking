@@ -206,15 +206,26 @@ The entry point. It loads the config, returns immediately when disabled, constru
 
 | Event | Action |
 |---|---|
-| `session_start` | Kick off startup without awaiting it |
-| `before_agent_start` | Await startup, queue the prompt for recall, compose system-prompt additions |
-| `context` | Run the pending recall, apply the takeover transform, inject recall |
+| `session_start` | Kick off startup without awaiting it; rebind when the session id changed |
+| `session_before_switch` | Commit the conversation being left (hosts that switch in place, e.g. omp) |
+| `session_switch` | Reset session state, then start the new conversation |
+| `before_agent_start` | Await startup, notice a `/clear`, queue the prompt for recall, compose system-prompt additions |
+| `context` | Admit oversized tool results, run the pending recall, apply the takeover transform, inject recall |
 | `tool_call` | Redirect host file tools that were handed a `viking://` URI |
 | `tool_result` | Append a notice to a `bash` result whose command carried a `viking://` URI |
 | `turn_end` | Sync the branch, feed the token estimate to takeover, update the status line |
 | `session_before_compact` | Takeover compaction, or a commit plus a fresh overview |
-| `session_shutdown` | Close the MCP bridge, then persist takeover state or commit one last time |
+| `session_shutdown` | Release the coexistence marker claim, close the MCP bridge, then persist takeover state or commit one last time |
 | `agent_end` | Invalidate the recall cache |
+
+**Conversation identity.** One instance may serve several conversations: a host
+that switches sessions in place keeps the same extension runner (omp), and
+`/clear` keeps the same session id outright. Both are handled by dropping the
+conversation-scoped state — OpenViking session binding, sync watermark, recall
+ledger binding and cache, takeover boundary and its persisted state — and
+starting again, with the derived OpenViking id carrying a suffix for the
+post-`/clear` generation. Anything less either captures a new conversation into
+an old memory stream or replays injected blocks the provider never sent.
 
 **Two guards.** The bypass check runs the shared `isBypassed` against the cwd, so a scratch directory never pollutes long-term memory; the pattern syntax is the shared one, identical across harnesses. The health check runs once — if the server is unreachable the extension stays disconnected for the whole session, every handler returns early and no tools are registered. No retries, no repeated warnings. A bypassed directory never opens the bridge at all: bypass means this directory does not touch OpenViking.
 
