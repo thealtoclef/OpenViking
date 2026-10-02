@@ -90,17 +90,19 @@ async function startServer() {
 function fakePi() {
   const handlers = new Map();
   const tools = [];
+  const commands = new Map();
   return {
     pi: {
       on(event, handler) { handlers.set(event, handler); },
       registerTool(tool) { tools.push(tool?.name); },
-      registerCommand() {},
+      registerCommand(name, command) { commands.set(name, command); },
       appendEntry() {},
       getAllTools() { return []; },
       sendMessage() {},
     },
     handlers,
     tools,
+    commands,
   };
 }
 
@@ -148,7 +150,7 @@ async function withExtension(t, fn) {
   const mod = await import(join(EXTENSION_DIR, "index.ts"));
   assert.equal(typeof mod.default, "function");
 
-  const { pi, handlers, tools } = fakePi();
+  const { pi, handlers, tools, commands } = fakePi();
   await mod.default(pi);
   const notified = [];
   const statuses = [];
@@ -156,6 +158,7 @@ async function withExtension(t, fn) {
     server,
     handlers,
     tools,
+    commands,
     notified,
     statuses,
     ctx: fakeCtx(notified, statuses),
@@ -260,3 +263,26 @@ for (const plugin of [{ mcpEnabled: false }, { bypassSession: true }]) {
     });
   });
 }
+
+test("/viking starts the session when session_start was never delivered", async (t) => {
+  await withExtension(t, async ({ server, commands, notified }) => {
+    // A host can install the extension into a session that is already running
+    // (omp's `plugin install`), where session_start fired before this extension
+    // existed and never fires again. No turn and no session_start here: the
+    // command itself is the only chance to start.
+    assert.equal(server.initializes.length, 0);
+
+    await commands.get("viking").handler("", fakeCtx(notified));
+
+    assert.ok(
+      server.initializes.length > 0,
+      "the status command must run the startup chain itself, not report 'not connected'",
+    );
+    assert.ok(
+      notified.some(([message]) => /OpenViking: connected/.test(message)),
+      JSON.stringify(notified),
+    );
+    await commands.get("viking").handler("", fakeCtx(notified));
+    assert.equal(server.initializes.length, 1, "start() is memoized; a second status call adds nothing");
+  });
+});

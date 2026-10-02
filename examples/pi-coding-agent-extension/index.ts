@@ -430,6 +430,13 @@ export default async function (pi: ExtensionAPI) {
   pi.registerCommand("viking", {
     description: "OpenViking status and manual operations. Use 'commit' to force a sync.",
     handler: async (args, ctx) => {
+      // A host can install the extension into a session that is already
+      // running, so `session_start` was delivered before this extension
+      // existed and will not arrive again. Starting here is what makes
+      // `/viking` usable on that install instead of reporting "not connected"
+      // until the next session. start() is memoized, so a normal session pays
+      // nothing for it.
+      await start(ctx);
       if (!connected) {
         ctx.ui.notify("OpenViking: not connected", "warning");
         return;
