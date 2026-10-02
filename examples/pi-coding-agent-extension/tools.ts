@@ -14,6 +14,12 @@ export function registerMcpTools(pi: any, bridge: McpBridge): string[] {
       label: "OpenViking " + tool.name,
       description: tool.description?.trim() || tool.title || "OpenViking " + tool.name,
       parameters: tool.inputSchema,
+      // These tools are named in the system prompt and in the URI-guard hints,
+      // so they have to be callable by name. omp mounts an extension tool whose
+      // `loadMode` is omitted under `xd://` (discoverable) whenever `tools.xdev`
+      // is on, which is the default, and a call to the bare name then does not
+      // resolve. `"essential"` pins them top-level. pi ignores the field.
+      loadMode: "essential" as const,
       // Validate before pi coerces values or drops optional null properties.
       prepareArguments(args: unknown) {
         const result = validate(args);
