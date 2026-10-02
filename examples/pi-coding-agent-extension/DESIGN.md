@@ -215,7 +215,7 @@ The entry point. It loads the config, returns immediately when disabled, constru
 | `tool_result` | Append a notice to a `bash` result whose command carried a `viking://` URI |
 | `turn_end` | Sync the branch, feed the token estimate to takeover, update the status line |
 | `session_before_compact` | Takeover compaction, or a commit plus a fresh overview |
-| `session_shutdown` | Release the coexistence marker claim, close the MCP bridge, then persist takeover state or commit one last time |
+| `session_shutdown` | Release the coexistence marker claim, close the MCP bridge, then commit the conversation (bounded to the host's shutdown budget; a timeout enqueues the commit for the next start) |
 | `agent_end` | Invalidate the recall cache |
 
 **Conversation identity.** One instance may serve several conversations: a host

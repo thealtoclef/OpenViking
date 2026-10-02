@@ -141,3 +141,18 @@ test("oversized tool results are projected in the context hook", async (t) => {
     await shutdown();
   });
 });
+
+test("shutdown commits the conversation, even under takeover", async (t) => {
+  await withExtension(t, async ({ server, turn, shutdown }) => {
+    await turn("hello");
+    await shutdown();
+    // Nothing else runs after a quit, so a tail left uncommitted is only ever
+    // archived if the user happens to resume that exact session. Takeover used
+    // to skip this commit entirely, which is how a real session ended with
+    // commit_count 0 and 592 pending tokens.
+    assert.ok(
+      server.requests.some((request) => /\/commit$/.test(request)),
+      JSON.stringify(server.requests),
+    );
+  });
+});

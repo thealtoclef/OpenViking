@@ -304,13 +304,13 @@ where it actually runs.
 
 ### Shutdown budget
 
-`turn_end` syncs each completed turn, so by the time `session_shutdown` runs only
-the last in-flight turn is outstanding. That matters because hosts cap the
-shutdown handler far below the others — omp allows 2 seconds where every other
-event gets 30 — so a final commit can be cut short on a slow server. Nothing is
-lost when it is: capture writes go through the pending queue keyed by session id
-and are replayed on the next start, and takeover had already persisted its
-state. Treat the shutdown commit as an optimization, not the only write.
+`turn_end` syncs each completed turn, but the *archive* is a commit, and nothing
+runs after a quit — so the shutdown handler attempts one, in every context mode,
+bounded to fit the host's shutdown budget (omp allows 2 seconds there where
+every other event gets 30). If the request does not finish in time it fails into
+the existing durable path: `commit()` enqueues the intent, and the next start
+replays it. That is why the budget is safe to keep small — a killed commit costs
+a delayed archive, never a lost one.
 
 ## Architecture
 
@@ -352,7 +352,7 @@ Arguments are checked against the server's original schema before pi's own valid
 | `context`              | Admit oversized tool results, run current-prompt recall, then inject takeover and recall context |
 | `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
 | `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages |
-| `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
+| `session_shutdown`     | Release the coexistence marker claim, close the MCP bridge, then commit the conversation within the host's shutdown budget |
 
 ### Conversation boundaries
 

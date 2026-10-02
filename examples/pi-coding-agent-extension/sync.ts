@@ -25,6 +25,13 @@ export interface SyncBranchResult {
   permanentFailures: number;
 }
 
+/**
+ * Budget for the commit attempted on shutdown. The host kills the shutdown
+ * handler far sooner than its others (omp: 2s against 30s), so this leaves room
+ * for the request to fail cleanly and take the durable path.
+ */
+const SHUTDOWN_COMMIT_TIMEOUT_MS = 1500;
+
 export class SyncManager {
   private client: OVClient;
   private config: OVConfig;
@@ -350,8 +357,23 @@ export class SyncManager {
     return result;
   }
 
+  /**
+   * Archive what this conversation produced before the process goes away.
+   *
+   * Without this the tail of a conversation stays pending forever: nothing runs
+   * after a quit, and only resuming that exact session would deliver it. Every
+   * other OpenViking plugin commits at its end-of-conversation boundary for the
+   * same reason.
+   *
+   * The host's shutdown budget is far below its other handlers (omp allows 2
+   * seconds where everything else gets 30), so the attempt is bounded and its
+   * failure path is the existing durable one: `commit()` enqueues the intent on
+   * failure, and the next start replays it. A commit that gets killed mid-flight
+   * therefore costs a delayed archive, never a lost one.
+   */
   async shutdown(): Promise<void> {
-    return;
+    if (!this.ovSessionId) return;
+    await this.commit({ timeoutMs: SHUTDOWN_COMMIT_TIMEOUT_MS });
   }
 }
 

@@ -604,11 +604,12 @@ export default async function (pi: ExtensionAPI) {
 
     if (!connected || bypassed) return;
 
+    // Archive this conversation before the process ends, whichever context mode
+    // is in use: `sync.shutdown()` bounds the attempt, and its failure path
+    // enqueues the commit for the next start.
     await sync.shutdown();
     if (config.takeoverEnabled) {
       await takeover.shutdown();
-    } else {
-      await sync.commit();
     }
   });
 
