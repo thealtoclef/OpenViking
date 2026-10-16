@@ -130,10 +130,10 @@ test("a turn captured before the clear is not captured again after it", async (t
     // re-sends the cleared prefix into the session that follows and extracts
     // the same memories twice.
     session.branch = [
-      { id: "m1", type: "message", message: { role: "user", content: "first", timestamp: 1 } },
-      { id: "m2", type: "message", message: { role: "assistant", content: "one", timestamp: 2 } },
-      { id: "m3", type: "message", message: { role: "user", content: "second", timestamp: 3 } },
-      { id: "m4", type: "message", message: { role: "assistant", content: "two", timestamp: 4 } },
+      { id: "m1", type: "message", message: { role: "user", content: "Remember the first conversation before clearing it.", timestamp: 1 } },
+      { id: "m2", type: "message", message: { role: "assistant", content: "The first conversation has useful details that must remain in its original session.", timestamp: 2 } },
+      { id: "m3", type: "message", message: { role: "user", content: "Remember the second exchange before clearing it.", timestamp: 3 } },
+      { id: "m4", type: "message", message: { role: "assistant", content: "The second exchange must not be copied into the conversation created after clearing.", timestamp: 4 } },
       { id: "b1", type: "reset_boundary" },
     ];
     statuses.length = 0;
@@ -142,8 +142,8 @@ test("a turn captured before the clear is not captured again after it", async (t
     // The turn that follows the clear lands after the marker.
     session.branch = [
       ...session.branch,
-      { id: "m5", type: "message", message: { role: "user", content: "after the clear", timestamp: 5 } },
-      { id: "m6", type: "message", message: { role: "assistant", content: "three", timestamp: 6 } },
+      { id: "m5", type: "message", message: { role: "user", content: "This is the first exchange after clearing the conversation.", timestamp: 5 } },
+      { id: "m6", type: "message", message: { role: "assistant", content: "Only this exchange belongs to the new conversation after the reset boundary.", timestamp: 6 } },
     ];
     await handlers.get("turn_end")({ type: "turn_end" }, ctx());
 

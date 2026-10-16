@@ -4,11 +4,11 @@
 
 Long-term semantic memory and context takeover for [omp (oh-my-pi)](https://github.com/can1357/oh-my-pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and OpenViking can own long-term context by replacing committed history with an archive overview in the host's `context` hook.
 
-**omp is the host this extension is developed and verified against** — including its session
-switches, its in-place `/clear`, its handler budgets and its tool-mounting rules. It also runs
-on [pi](https://github.com/earendil-works/pi), which shares the extension API; the differences
-are host capabilities (a projected context, an agent identity, a shutdown budget) that the
-extension probes for rather than assumes, so nothing here is pi-specific or omp-specific.
+**The packaged extension supports omp and [pi](https://github.com/earendil-works/pi)**
+for startup, `/viking`, and MCP tool registration. Pi's real session-manager and
+transcript integration checks also pass. Host differences — projected context,
+agent identity, conversation switches, handler budgets, and tool mounting — are
+handled through capability probes rather than separate per-host implementations.
 See [DESIGN.md](./DESIGN.md) for the module-by-module design.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
@@ -543,6 +543,26 @@ pi-coding-agent-extension/
 ```
 
 TypeScript is loaded directly by pi's jiti transpiler. The official MCP client is installed from the committed npm lockfile; node_modules is not bundled in marketplace archives.
+
+## Publishing
+
+The npm package `@thealtoclef/pi-openviking` uses date-based CalVer:
+
+- First release on a date: `YYYY.M.D`, for example `2026.10.17`.
+- Further releases on that same date: `YYYY.M.D-post.N`, starting at
+  `2026.10.17-post.1`. Increment `N`, not the calendar day.
+
+Stage the release with the chosen version, or supply it to the publishing
+workflow's `version` input:
+
+```bash
+node examples/pi-coding-agent-extension/publish/stage.mjs --version 2026.10.17
+```
+
+Staging runs the extension tests and an npm packaging dry run; it does not
+publish. npm treats `-post.N` as a prerelease suffix, so publication must
+explicitly set `--tag latest`, as the publishing workflow does.
+
 
 ## Troubleshooting
 

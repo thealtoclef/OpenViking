@@ -13,11 +13,19 @@ const TEMPLATE = JSON.parse(
   await readFile(join(dirname(fileURLToPath(import.meta.url)), "..", "publish", "package.template.json"), "utf8"),
 );
 
-test("only CalVer versions are accepted", () => {
-  assert.ok(isPublishableVersion("2026.10.1"));
-  assert.ok(!isPublishableVersion("1.0.0"), "npm-style semver is not this package's versioning");
-  assert.ok(!isPublishableVersion("2026.10"), "a missing release counter is not a version");
-  assert.throws(() => buildPublishManifest(TEMPLATE, "1.2.3"), /CalVer/);
+test("release versions use calendar dates and positive same-day post counters", () => {
+  for (const version of ["2026.10.2", "2026.10.2-post.1", "2026.10.2-post.12", "2024.2.29", "2026.12.31-post.1"]) {
+    assert.ok(isPublishableVersion(version), version);
+  }
+  for (const version of [
+    "1.0.0", "2026.10", "2026.0.2", "2026.13.2", "2026.10.0",
+    "2026.2.29", "2026.4.31", "2026.10.32", "2026.010.2", "2026.10.02",
+    "2026.10.2-post.0", "2026.10.2-post.01", "2026.10.2-post",
+    "2026.10.2-post.-1", "2026.10.2-post.1.2", "2026.10.2+post.1",
+  ]) {
+    assert.ok(!isPublishableVersion(version), version);
+    assert.throws(() => buildPublishManifest(TEMPLATE, version), /CalVer/);
+  }
 });
 
 test("the overlay carries the fields a host install needs", () => {

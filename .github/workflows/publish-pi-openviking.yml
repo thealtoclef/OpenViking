@@ -8,13 +8,13 @@ name: Publish pi-openviking
 # carries release-only fields and a rebase cannot conflict on them.
 #
 # `if:` deliberately matches a fork, not the upstream repository: an upstream
-# push must never publish this scope. Manual dispatch only, because the version
-# is CalVer chosen by hand (`2026.9.4` was the last release).
+# push must never publish this scope. Manual dispatch only: versions use the
+# release date YYYY.M.D, then YYYY.M.D-post.N for further releases that day.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "CalVer release version (YYYY.M.N), e.g. 2026.10.1"
+        description: "CalVer YYYY.M.D; same-day releases use YYYY.M.D-post.N, e.g. 2026.10.2-post.1"
         required: true
         type: string
 

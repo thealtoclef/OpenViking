@@ -230,9 +230,8 @@ an old memory stream or replays injected blocks the provider never sent.
 **Host capabilities, not host names.** Every difference between hosts is probed, not
 branched on a product: whether the session manager projects a context
 (`buildContextEntries`), whether the context carries an agent identity (`agent.kind`),
-and whether the host announces a conversation change (`session_switch`). This extension
-is developed and verified against omp; the probes are what let the same file also run
-under pi without a per-host fork.
+and whether the host announces a conversation change (`session_switch`). The same
+packaged extension is verified on omp and pi; these probes avoid a per-host fork.
 
 **Two guards.** The bypass check runs the shared `isBypassed` against the cwd, so a scratch directory never pollutes long-term memory; the pattern syntax is the shared one, identical across harnesses. The health check runs once — if the server is unreachable the extension stays disconnected for the whole session, every handler returns early and no tools are registered. No retries, no repeated warnings. A bypassed directory never opens the bridge at all: bypass means this directory does not touch OpenViking.
 

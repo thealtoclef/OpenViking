@@ -15,7 +15,7 @@
  * those tools. Both were the earlier fork's overlay bugs.
  *
  * Usage:
- *   node publish/stage.mjs --version 2026.10.1 [--out dist]
+ *   node publish/stage.mjs --version 2026.10.2-post.1 [--out dist]
  */
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -30,7 +30,11 @@ export const REPO_ROOT = resolve(EXTENSION_DIR, "..", "..");
 export const STAGING_ONLY_ENTRIES = ["node_modules", "package-lock.json", "publish", "dist"];
 
 export function isPublishableVersion(value) {
-  return /^\d{4}\.\d{1,2}\.\d+$/.test(String(value || ""));
+  const match = /^([1-9]\d{3})\.([1-9]|1[0-2])\.([1-9]|[12]\d|3[01])(?:-post\.[1-9]\d*)?$/.exec(String(value || ""));
+  if (!match) return false;
+  const [, year, month, day] = match;
+  const daysInMonth = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate();
+  return Number(day) <= daysInMonth;
 }
 
 /**
@@ -40,7 +44,7 @@ export function isPublishableVersion(value) {
  */
 export function buildPublishManifest(template, version) {
   if (!isPublishableVersion(version)) {
-    throw new Error(`version must be CalVer YYYY.M.N, got ${JSON.stringify(version)}`);
+    throw new Error(`version must be CalVer YYYY.M.D or YYYY.M.D-post.N (N >= 1), got ${JSON.stringify(version)}`);
   }
   return { ...template, version };
 }
@@ -95,7 +99,7 @@ async function main() {
   const outDir = resolve(REPO_ROOT, outIndex >= 0 ? args[outIndex + 1] : "dist/pi-openviking-stage");
 
   if (!isPublishableVersion(version)) {
-    console.error("usage: node publish/stage.mjs --version YYYY.M.N [--out DIR]");
+    console.error("usage: node publish/stage.mjs --version YYYY.M.D[-post.N] [--out DIR] (N >= 1)");
     process.exit(2);
   }
 

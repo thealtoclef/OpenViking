@@ -60,6 +60,7 @@ async function openSession(t, config = {}) {
       flush: async () => true,
       commit: async () => ({
         status: "accepted",
+        effective_enable_working_memory: true,
         archived: true,
         archive_uri: `viking://user/u/sessions/pi-s/history/archive_${String(++archives).padStart(3, "0")}`,
       }),
